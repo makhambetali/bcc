@@ -1,11 +1,13 @@
 import pandas as pd
 import os
 
-# --- КОНФИГУРАЯ ---
+# --- КОНФИГУРАЦИЯ ---
 DATA_DIRECTORY = 'case1'
 CLIENT_PROFILES_PATH = os.path.join(DATA_DIRECTORY, 'clients.csv')
 
-# --- ФУНКЦИИ СКОРИНГА (ОБНОВЛЕННЫЕ) ---
+
+
+# --- ФУНКЦИИ СКОРИНГА (С ИЗМЕНЕНИЯМИ) ---
 
 def score_travel_card(features: dict) -> float:
     travel_spend = (
@@ -18,18 +20,63 @@ def score_travel_card(features: dict) -> float:
         score *= 1.2
     return score
 
-def score_premium_card(features: dict) -> float:
-    # ИЗМЕНЕНИЕ: Кешбэк теперь зависит от баланса (tier_cashback)
+def calculate_global_thresholds(profiles_df: pd.DataFrame) -> dict:
+    """
+    Автоматически вычисляет пороговые значения по всей базе клиентов.
+    """
+    thresholds = {}
+    
+    # 1. Расчет порогов для баланса
+    balance_data = profiles_df['avg_monthly_balance_KZT']
+    thresholds['balance_mid'] = balance_data.quantile(0.75)
+    thresholds['balance_high'] = balance_data.quantile(0.85)
+    
+    # 2. Расчет порогов для частоты снятий в банкоматах
+    atm_counts = []
+    for client_id in profiles_df.index:
+        try:
+            transfers_path = os.path.join(DATA_DIRECTORY, f'client_{client_id}_transfers_3m.csv')
+            transfers_df = pd.read_csv(transfers_path)
+            count = transfers_df[transfers_df['type'] == 'atm_withdrawal'].shape[0]
+            atm_counts.append(count)
+        except FileNotFoundError:
+            atm_counts.append(0)
+            
+    thresholds['atm_frequency'] = pd.Series(atm_counts).quantile(0.75)
+    
+    print("--- Автоматически рассчитанные пороги ---")
+    print(f"  - Порог баланса (средний): {thresholds['balance_mid']:,.0f} KZT (75-й перцентиль)")
+    print(f"  - Порог баланса (высокий): {thresholds['balance_high']:,.0f} KZT (85-й перцентиль)")
+    print(f"  - Порог частых снятий: {thresholds['atm_frequency']:.0f} раз (75-й перцентиль)")
+    print("-----------------------------------------")
+    
+    return thresholds
+
+# --- ФУНКЦИИ СКОРИНГА (ТЕПЕРЬ ПРИНИМАЮТ ПОРОГИ) ---
+
+def score_premium_card(features: dict, thresholds: dict) -> float:
+    """
+    Оценка Премиальной карты с ДИНАМИЧЕСКИМИ порогами.
+    """
+    # Используем пороги из словаря, а не константы
+    BALANCE_THRESHOLD_MID = thresholds['balance_mid']
+    BALANCE_THRESHOLD_HIGH = thresholds['balance_high']
+    ATM_FREQUENCY_THRESHOLD = thresholds['atm_frequency']
+    
     avg_balance = features.get('avg_monthly_balance_KZT', 0)
-    if avg_balance < 500000:
+    if avg_balance < BALANCE_THRESHOLD_MID:
         tier_cashback_rate = 0.02
-    elif avg_balance < 2000000:
+    elif avg_balance < BALANCE_THRESHOLD_HIGH:
         tier_cashback_rate = 0.03
     else:
         tier_cashback_rate = 0.04
         
     ATM_FEE = 500
     saved_fees = features.get('atm_withdrawal_count', 0) * ATM_FEE
+    
+    frequent_user_bonus = 0
+    if features.get('atm_withdrawal_count', 0) >= ATM_FREQUENCY_THRESHOLD:
+        frequent_user_bonus = 5000
     
     premium_spend = (
         features['spend_by_category'].get('Ювелирные украшения', 0) +
@@ -42,7 +89,7 @@ def score_premium_card(features: dict) -> float:
     base_spend = total_spend - premium_spend
     base_cashback = base_spend * tier_cashback_rate
     
-    return saved_fees + premium_cashback + base_cashback
+    return saved_fees + premium_cashback + base_cashback + frequent_user_bonus
 
 def score_credit_card(features: dict) -> float:
     top_3_spend = features.get('top_3_spend', 0)
@@ -65,39 +112,36 @@ def score_cash_loan(features: dict) -> float:
     return 0
     
 def score_savings_deposit(features: dict) -> float:
-    # ИЗМЕНЕНИЕ: Оценка теперь основана на балансе
-    # Сигнал: стабильный крупный остаток [cite: 43]
+    # ИЗМЕНЕНИЕ: Используем волатильность, как требует ТЗ
     avg_balance = features.get('avg_monthly_balance_KZT', 0)
-    # Условие: остаток > 1 млн и он составляет > 50% от всех доходов (признак стабильности)
-    if avg_balance > 1000000 and avg_balance > features.get('total_in', 0) * 0.5:
-        # Выгода - примерный доход по вкладу за 3 месяца (ставка 14% годовых)
+    spend_volatility = features.get('spend_volatility', float('inf'))
+    mean_spend_per_transaction = features.get('mean_spend', 0)
+
+    # Условие: баланс крупный, а волатильность низкая (стандартное отклонение меньше среднего чека)
+    if avg_balance > 1000000 and spend_volatility < mean_spend_per_transaction:
         return avg_balance * (0.14 / 4)
     return 0
 
 def score_cumulative_deposit(features: dict) -> float:
-    # ИЗМЕНЕНИЕ: Оценка теперь основана на балансе
-    # Сигнал: регулярные небольшие остатки [cite: 46]
-    avg_balance = features.get('avg_monthly_balance_KZT', 0)
-    # Условие: остаток от 100 тыс до 1 млн (небольшой, но и не нулевой)
-    if 100000 < avg_balance <= 1000000:
-        # Выгода - примерный доход по вкладу за 3 месяца (ставка 12% годовых)
-        return avg_balance * (0.12 / 4)
+    # ИЗМЕНЕНИЕ: Используем анализ ежемесячных излишков
+    avg_monthly_surplus = features.get('avg_monthly_surplus', 0)
+    
+    # Условие: у клиента каждый месяц стабильно остаются свободные деньги
+    if features.get('is_surplus_stable', False) and avg_monthly_surplus > 50000:
+        # Оценка - это средний размер накоплений за 3 месяца
+        return avg_monthly_surplus * 3
     return 0
     
 def score_multicurrency_deposit(features: dict) -> float:
-    # ИЗМЕНЕНИЕ: Оценка теперь основана на балансе и FX
-    # Сигнал: свободный остаток + FX-активность [cite: 40]
     avg_balance = features.get('avg_monthly_balance_KZT', 0)
     has_fx_activity = features.get('fx_buy_sum', 0) > 0 or features.get('fx_spend_sum', 0) > 0
     if avg_balance > 200000 and has_fx_activity:
-        return avg_balance * (0.10 / 4) # Ставка ниже, т.к. вклад гибкий
+        return avg_balance * (0.10 / 4)
     return 0
     
 def score_investments(features: dict) -> float:
-    # ИЗМЕНЕНИЕ: Базовая оценка на основе баланса
     avg_balance = features.get('avg_monthly_balance_KZT', 0)
     if avg_balance > 500000:
-        # Условный балл, т.к. прямую выгоду посчитать сложно
         return avg_balance * 0.05
     return 0
 
@@ -118,19 +162,35 @@ def analyze_single_client(client_id: int, profiles_df: pd.DataFrame):
         return
 
     features = {}
-    
-    # ИЗМЕНЕНИЕ: Добавляем фичи из профиля
     features['avg_monthly_balance_KZT'] = client_profile['avg_monthly_balance_KZT']
     features['status'] = client_profile['status']
     
-    # Фичи из транзакций
+    # НОВОЕ: Расчет волатильности
+    features['spend_volatility'] = transactions_df['amount'].std()
+    features['mean_spend'] = transactions_df['amount'].mean()
+
+    # НОВОЕ: Анализ временных рядов
+    transactions_df['date'] = pd.to_datetime(transactions_df['date'])
+    transfers_df['date'] = pd.to_datetime(transfers_df['date'])
+
+    monthly_income = transfers_df[transfers_df['direction'] == 'in'].set_index('date')['amount'].resample('M').sum()
+    monthly_expenses = transactions_df.set_index('date')['amount'].resample('M').sum()
+    
+    # Объединяем доходы и расходы по месяцам, заполняя пропуски нулями
+    monthly_financials = pd.concat([monthly_income.rename('income'), monthly_expenses.rename('expenses')], axis=1).fillna(0)
+    monthly_financials['surplus'] = monthly_financials['income'] - monthly_financials['expenses']
+    
+    # Проверяем, был ли излишек стабильным (каждый месяц в плюсе)
+    features['is_surplus_stable'] = (monthly_financials['surplus'] > 0).all()
+    features['avg_monthly_surplus'] = monthly_financials['surplus'].mean() if features['is_surplus_stable'] else 0
+
+    # Старые фичи
     features['spend_by_category'] = transactions_df.groupby('category')['amount'].sum()
     features['fx_spend_sum'] = transactions_df[transactions_df['currency'].isin(['USD', 'EUR'])]['amount'].sum()
     top_3 = features['spend_by_category'].nlargest(3)
     features['top_3_categories'] = top_3.index.tolist()
     features['top_3_spend'] = top_3.sum()
     
-    # Фичи из переводов
     transfers_agg = transfers_df.groupby('type')['amount'].agg(['sum', 'size'])
     features['atm_withdrawal_count'] = transfers_agg.loc['atm_withdrawal']['size'] if 'atm_withdrawal' in transfers_agg.index else 0
     features['fx_buy_sum'] = transfers_agg.loc['fx_buy']['sum'] if 'fx_buy' in transfers_agg.index else 0
@@ -151,7 +211,6 @@ def analyze_single_client(client_id: int, profiles_df: pd.DataFrame):
         "Золотые слитки": score_gold_bars(features)
     }
     
-    # ИЗМЕНЕНИЕ: Корректировка на основе статуса
     if features['status'] == 'Студент':
         scores['Инвестиции'] *= 0.2
         scores['Золотые слитки'] *= 0.1
@@ -175,7 +234,5 @@ if __name__ == "__main__":
         print(f"ОШИБКА: Главный файл профилей {CLIENT_PROFILES_PATH} не найден.")
         exit()
 
-    # 👇 УКАЖИТЕ ID КЛИЕНТА, КОТОРОГО НУЖНО ПРОАНАЛИЗИРОВАТЬ
-    CLIENT_ID_TO_ANALYZE = 3
-    
+    CLIENT_ID_TO_ANALYZE = 98
     analyze_single_client(CLIENT_ID_TO_ANALYZE, all_profiles)

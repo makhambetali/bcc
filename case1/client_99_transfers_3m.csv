@@ -1,0 +1,3 @@
+client_code,name,product,status,city,date,type,direction,amount,currency
+99,Тестовый Сберегатель,Счет,стандарт,Астана,2025-07-05 10:00:00,salary_in,in,5000000.00,KZT
+99,Тестовый Сберегатель,Счет,стандарт,Астана,2025-08-05 10:00:00,salary_in,in,5000000.00,KZT
