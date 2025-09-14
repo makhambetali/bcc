@@ -5,32 +5,36 @@ from notifications import send_push_notification
 import csv
 from pathlib import Path
 
-DATA_DIRECTORY = 'case1'
-CLIENT_PROFILES_PATH = os.path.join(DATA_DIRECTORY, 'clients.csv')
 
-def write_to_csv(row):
-    out_path = Path("out/recommendations_append.csv")
+def write_to_csv(row: Dict, filename: str):
+    out_path = Path(filename)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     file_exists = out_path.exists()
+    
+
     with out_path.open("a", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=["client_code", "product", "push_notification"])
+        writer = csv.DictWriter(f, fieldnames=row.keys())
         if not file_exists:
             writer.writeheader()
         writer.writerow(row)
 
 class ClientAnalyzer:
-    def __init__(self, client_id):
+
+    def __init__(self, client_id: int, output_filename: str):
         self.DATA_DIRECTORY = 'case1'
         self.CLIENT_PROFILES_PATH = os.path.join(self.DATA_DIRECTORY, 'clients.csv')
         self.client_id = client_id
+        self.output_filename = output_filename 
+        
         try:
             self.all_profiles = pd.read_csv(self.CLIENT_PROFILES_PATH).set_index('client_code')
         except FileNotFoundError:
             print(f"Критическая ошибка: Файл профилей {self.CLIENT_PROFILES_PATH} не найден.")
-            exit()
-        
+            raise
+
         self.load_client_data()
     
+
     def load_client_data(self) -> Dict[str, Any]:
         """
         Загружает все данные (профиль, транзакции, переводы) для одного клиента по его ID.
@@ -97,7 +101,7 @@ class ClientAnalyzer:
         spend_by_category = self.transactions_df.groupby('category')['amount'].sum()
         online_categories = {'Играем дома', 'Едим дома', 'Смотрим дома'}
         top_3_categories = spend_by_category.nlargest(3)
-        # 4. Объединяем топ-3 и онлайн-категории в одно множество, чтобы избежать двойного подсчета
+
         # all_relevant_categories = set(top_3_categories.index).union(online_categories)
         all_relevant_categories = online_categories
         # 5. Считаем итоговую сумму по уникальному списку категорий
@@ -256,114 +260,102 @@ class ClientAnalyzer:
         return {"scores": scores, "best_product": best_product}
 
     def execute(self):
-        # print(f'currency exchange ratio: {self.calculate_currency_exchange_ratio()}')
-        # print(f'gold ratio: {self.calculate_gold_ratio()}')
-        # print(f'investment ratio: {self.calculate_invest_ratio()}')
+        # ... (логика анализа) ...
+
+        # ИЗМЕНЕНИЕ 3: В конце метода execute() используем self.output_filename
+        # для вызова write_to_csv
         ratio_variables = {
             'Обмен валют': self.calculate_currency_exchange_ratio(),
             'Золотые слитки': self.calculate_gold_ratio(),
             'Инвестиции': self.calculate_invest_ratio()
         }
         
-        # if max(ratio_variables.values()) > 0.3:
-        max_key = 'Обмен валют'
+        max_key = max(ratio_variables, key=ratio_variables.get)
         max_ratio = ratio_variables[max_key]
         
-        for key in ratio_variables:
-            if ratio_variables[key] > max_ratio:
-                max_ratio = ratio_variables[key]
-                max_key = key
-        # print(f'MAX: {max_key}: {max_ratio}')
         if max_ratio > 0.3:
-            # print(f'jb: {max_key}: {max_ratio}')
             print(max_key)
-            row = send_push_notification(self.client_id,max_key, max_ratio)
-            write_to_csv(row)
+            row = send_push_notification(self.client_id, max_key, max_ratio)
+            write_to_csv(row, self.output_filename) # Передаем имя файла
             return row
         
-        # self.calculate_dep_savings_score()
         dep_result = self.choose_best_deposit()
-        # print(list(dep_result['scores'].values()))
-        max_score = dep_result['scores']['Депозит Сберегательный']
-        max_score_key = 'Депозит Сберегательный'
-        if list(dep_result['scores'].values()) != [0, 0, 0]:
-            for key in dep_result['scores']:
-                if dep_result['scores'][key] > max_score:
-                    max_score = dep_result['scores'][key]
-                    max_score_key = key
-            print(max_score_key)
-            row = send_push_notification(self.client_id,max_score_key, max_score)
-            write_to_csv(row)
-            return row
-        travel_cashback = self.calculate_travel_card_cashback()
-        premium_cashback = self.calculate_premium_card_cashback()
-        credit_cashback = self.calculate_credit_card_cashback()
-        print(f'КАРТЫ ДЛЯ ПУТЕШЕСТВИЙ: {travel_cashback} KZT')
-        print(f'ПРЕМИАЛЬНАЯ КАРТА: {premium_cashback} KZT')
-        print(f'КРЕДИТНАЯ КАРТА: {credit_cashback} KZT')
-        # print(max(travel_cashback, premium_cashback))
-        max_cashback = max(travel_cashback, premium_cashback)
-        if max_cashback ==travel_cashback:
-            print('КАРТЫ ДЛЯ ПУТЕШЕСТВИЙ')
-            max_cashback_key = "КАРТЫ ДЛЯ ПУТЕШЕСТВИЙ"
-        else:
-            print('ПРЕМИАЛЬНАЯ КАРТА')
-            max_cashback_key = "ПРЕМИАЛЬНАЯ КАРТА"
-        row = send_push_notification(self.client_id,max_cashback_key, max_cashback)
-        write_to_csv(row)
-        return row
+        max_score_key = dep_result.get('best_product')
         
-
-
-        # if dep_result.values() =
-        # print("=== Депозиты ===")
-        # print(dep_result['best_product'])
-        # for k, v in dep_result["scores"].items():
-        #     print(f"{k}: {v:.2f}")
-        # print(f"Лучший депозит для клиента {self.client_id}: {dep_result['best_product']}")
-
-
+        if max_score_key and dep_result['scores'][max_score_key] > 0:
+            max_score = dep_result['scores'][max_score_key]
+            print(max_score_key)
+            row = send_push_notification(self.client_id, max_score_key, max_score)
+            write_to_csv(row, self.output_filename) # Передаем имя файла
+            return row
+            
+        cashbacks = {
+            "КАРТА ДЛЯ ПУТЕШЕСТВИЙ": self.calculate_travel_card_cashback(),
+            "ПРЕМИАЛЬНАЯ КАРТА": self.calculate_premium_card_cashback(),
+            # "КРЕДИТНАЯ КАРТА": self.calculate_credit_card_cashback()
+        }
+        
+        max_cashback_key = max(cashbacks, key=cashbacks.get)
+        max_cashback = cashbacks[max_cashback_key]
+        
+        print(max_cashback_key)
+        row = send_push_notification(self.client_id, max_cashback_key, max_cashback)
+        write_to_csv(row, self.output_filename) # Передаем имя файла
+        return row
 
     def get_balance_statistics(self) -> Dict[str, float]:
-        """
-        Рассчитывает ключевые статистические показатели (среднее, медиана, перцентили)
-        по колонке avg_monthly_balance_KZT для всех клиентов.
-
-        Args:
-            profiles_df: DataFrame, содержащий профили всех клиентов.
-
-        Returns:
-            Словарь со статистическими показателями.
-        """
         balance_data = self.all_profiles['avg_monthly_balance_KZT']
-    
         stats = {
-            "mean": balance_data.mean(),
-            "median": balance_data.median(),
-            "75%": balance_data.quantile(0.75),
-            "85%": balance_data.quantile(0.85),
+            "mean": balance_data.mean(), "median": balance_data.median(),
+            "75%": balance_data.quantile(0.75), "85%": balance_data.quantile(0.85),
             "95%": balance_data.quantile(0.95)
         }
         return stats
 
-
-
-
+# --- Основной блок выполнения ---
 if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description="Анализ клиента по ID")
-    
     parser.add_argument("-id", "--client_id", type=int, help="ID клиента для анализа")
-    
     args = parser.parse_args()
+    
+    output_dir = Path("out")
+    output_dir.mkdir(exist_ok=True)
+
 
     if args.client_id:
         print(f"Запуск анализа для одного клиента с ID={args.client_id}")
-        ca = ClientAnalyzer(args.client_id)
-        ca.execute()
+        # Создаем уникальное имя файла для одного клиента
+        output_filename = str(output_dir / f"recommendation_client_{args.client_id}.csv")
+        
+        # Если файл существует, удаляем его, чтобы он всегда был новым
+        if os.path.exists(output_filename):
+            os.remove(output_filename)
+        
+        try:
+            # Передаем имя файла в конструктор
+            analyzer = ClientAnalyzer(args.client_id, output_filename)
+            analyzer.execute()
+            print(f"Результат сохранен в файл: {output_filename}")
+        except Exception as e:
+            print(f"Не удалось обработать клиента {args.client_id}: {e}")
+
     else:
         print("ID клиента не указан. Запуск анализа для всех клиентов (1-60).")
-        for id_to_analyze in range(1, 61):
-            ca = ClientAnalyzer(id_to_analyze)
-            ca.execute()
+        # Используем общее имя файла для всех
+        output_filename = str(output_dir / "recommendations_append.csv")
+
+        # Очищаем файл ПЕРЕД началом цикла
+        if os.path.exists(output_filename):
+            os.remove(output_filename)
+        
+        for client_id in range(1, 61):
+            try:
+                # Передаем одно и то же имя файла для каждого клиента
+                analyzer = ClientAnalyzer(client_id, output_filename)
+                analyzer.execute()
+            except Exception as e:
+                print(f"Не удалось обработать клиента {client_id}: {e}")
+        
+        print(f"Обработка завершена. Результаты сохранены в файл: {output_filename}")
