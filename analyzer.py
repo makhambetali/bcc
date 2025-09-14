@@ -1,9 +1,22 @@
 import pandas as pd
 import os
 from typing import Dict, Any
+from notifications import send_push_notification
+import csv
+from pathlib import Path
 
 DATA_DIRECTORY = 'case1'
 CLIENT_PROFILES_PATH = os.path.join(DATA_DIRECTORY, 'clients.csv')
+
+def write_to_csv(row):
+    out_path = Path("out/recommendations_append.csv")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    file_exists = out_path.exists()
+    with out_path.open("a", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=["client_code", "product", "push_notification"])
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
 
 class ClientAnalyzer:
     def __init__(self, client_id):
@@ -17,6 +30,7 @@ class ClientAnalyzer:
             exit()
         
         self.load_client_data()
+    
     def load_client_data(self) -> Dict[str, Any]:
         """
         Загружает все данные (профиль, транзакции, переводы) для одного клиента по его ID.
@@ -92,6 +106,35 @@ class ClientAnalyzer:
         # print(final_sum, list(all_relevant_categories), top_3_categories)
 
         return final_sum * 0.1
+    # def calculate_credit_card_cashback(self):
+    #     """
+    #     ИСПРАВЛЕНО: Считает кешбэк для Кредитной карты, выбирая топ-3
+    #     категории только из заданного списка.
+    #     """
+    #     # Шаг 1: Определяем список категорий, из которых можно выбирать "любимые"
+    #     eligible_categories = {
+    #         'Косметика и Парфюмерия', 'Одежда и обувь', 'Медицина', 'Авто', 
+    #         'Спорт', 'Развлечения', 'АЗС', 'Кино', 'Питомцы', 'Книги', 'Цветы'
+    #     }
+        
+    #     # Шаг 2: Считаем траты клиента по всем категориям
+    #     spend_by_category = self.transactions_df.groupby('category')['amount'].sum()
+
+    #     # Шаг 3: Фильтруем траты, оставляя только те, что входят в разрешенный список
+    #     eligible_spend = spend_by_category[spend_by_category.index.isin(eligible_categories)]
+        
+    #     # Шаг 4: Находим топ-3 самых затратных категории ИЗ ОТФИЛЬТРОВАННОГО СПИСКА
+    #     top_3_from_eligible = eligible_spend.nlargest(3)
+
+    #     # Шаг 5: Объединяем эти топ-3 категории с онлайн-сервисами, избегая дубликатов
+    #     online_categories = {'Играем дома', 'Едим дома', 'Смотрим дома'}
+    #     all_cashback_categories = set(top_3_from_eligible.index).union(online_categories)
+        
+    #     # Шаг 6: Считаем итоговую сумму трат, на которую будет начислен кешбэк
+    #     total_cashback_spend = spend_by_category[spend_by_category.index.isin(all_cashback_categories)].sum()
+        
+    #     # Шаг 7: Возвращаем 10% от этой суммы
+    #     return total_cashback_spend * 0.1
 
     def calculate_currency_exchange_ratio(self):
         if self.transfers_df.empty:
@@ -234,9 +277,11 @@ class ClientAnalyzer:
         if max_ratio > 0.3:
             # print(f'jb: {max_key}: {max_ratio}')
             print(max_key)
-            return
+            row = send_push_notification(self.client_id,max_key, max_ratio)
+            write_to_csv(row)
+            return row
         
-        self.calculate_dep_savings_score()
+        # self.calculate_dep_savings_score()
         dep_result = self.choose_best_deposit()
         # print(list(dep_result['scores'].values()))
         max_score = dep_result['scores']['Депозит Сберегательный']
@@ -247,7 +292,9 @@ class ClientAnalyzer:
                     max_score = dep_result['scores'][key]
                     max_score_key = key
             print(max_score_key)
-            return
+            row = send_push_notification(self.client_id,max_score_key, max_score)
+            write_to_csv(row)
+            return row
         travel_cashback = self.calculate_travel_card_cashback()
         premium_cashback = self.calculate_premium_card_cashback()
         credit_cashback = self.calculate_credit_card_cashback()
@@ -258,8 +305,15 @@ class ClientAnalyzer:
         max_cashback = max(travel_cashback, premium_cashback)
         if max_cashback ==travel_cashback:
             print('КАРТЫ ДЛЯ ПУТЕШЕСТВИЙ')
+            max_cashback_key = "КАРТЫ ДЛЯ ПУТЕШЕСТВИЙ"
         else:
             print('ПРЕМИАЛЬНАЯ КАРТА')
+            max_cashback_key = "ПРЕМИАЛЬНАЯ КАРТА"
+        row = send_push_notification(self.client_id,max_cashback_key, max_cashback)
+        write_to_csv(row)
+        return row
+        
+
 
         # if dep_result.values() =
         # print("=== Депозиты ===")
@@ -292,13 +346,24 @@ class ClientAnalyzer:
         }
         return stats
 
+
+
+
 if __name__ == '__main__':
     import argparse
+
     parser = argparse.ArgumentParser(description="Анализ клиента по ID")
-    parser.add_argument("client_id", type=int, help="ID клиента для анализа")
+    
+    parser.add_argument("-id", "--client_id", type=int, help="ID клиента для анализа")
+    
     args = parser.parse_args()
 
-    ca = ClientAnalyzer(args.client_id)
-    ca.execute()
-    # ca.calculate_dep_savings_score()
-    
+    if args.client_id:
+        print(f"Запуск анализа для одного клиента с ID={args.client_id}")
+        ca = ClientAnalyzer(args.client_id)
+        ca.execute()
+    else:
+        print("ID клиента не указан. Запуск анализа для всех клиентов (1-60).")
+        for id_to_analyze in range(1, 61):
+            ca = ClientAnalyzer(id_to_analyze)
+            ca.execute()

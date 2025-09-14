@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Анализ клиентов с кэшированием</title>
+    <style>
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f7f9;
+            color: #333;
+        }
+
+
+        .container {
+            max-width: 1000px;
+            margin: auto;
+            background-color: #fff;
+            padding: 25px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+        }
+        
+
+        .table-container {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #dfe6e9;
+            border-radius: 4px;
+        }
+
+
+        table {
+            width: 100%;
+            border-collapse: collapse; 
+        }
+
+        th, td {
+            border-bottom: 1px solid #dfe6e9;
+            padding: 12px 15px;
+            text-align: left;
+        }
+
+
+        thead th {
+            background-color: #3498db;
+            color: #ffffff;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        
+
+        tbody tr:nth-of-type(even) { background-color: #f8f9fa; }
+        tbody tr:hover { background-color: #ecf0f1; cursor: pointer; }
+        .selected { background-color: #d4edda !important; color: #155724; font-weight: bold; }
+
+
+        .controls {
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        button {
+            background-color: #2ecc71;
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s ease, opacity 0.3s ease;
+        }
+
+        button:hover { background-color: #27ae60; }
+        button:disabled { background-color: #95a5a6; cursor: not-allowed; opacity: 0.7; }
+
+        p { text-align: center; font-size: 18px; margin-top: 20px; }
+        #selectedClientId { font-weight: bold; color: #e74c3c; }
+
+
+        #loader {
+            margin: 20px auto;
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+
+        #result-display {
+            margin-top: 20px;
+            padding: 20px;
+            border-left: 5px solid #3498db;
+            border-radius: 5px;
+            background-color: #f8f9fa;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            text-align: left;
+        }
+
+        #result-display h3 {
+            margin-top: 0;
+            color: #2980b9;
+        }
+
+        #result-display p {
+            font-size: 1rem;
+            line-height: 1.6;
+            text-align: left;
+        }
+        
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Данные клиентов</h1>
+    
+    <div class="table-container"> 
+        <table id="clientsTable">
+            <thead>
+                <tr>
+                    <th>ID</th><th>Имя</th><th>Статус</th><th>Возраст</th><th>Город</th><th>Среднемесячный баланс (KZT)</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div class="controls">
+        <button id="showIdButton">Анализировать клиента</button>
+        <p>Выбранный ID клиента: <span id="selectedClientId">не выбран</span></p>
+    </div>
+
+    <div id="loader" class="hidden"></div>
+    <div id="result-display" class="hidden"></div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const clientsData = [
+            { client_code: 1, name: "Айгерим", status: "Зарплатный клиент", age: 29, city: "Алматы", avg_monthly_balance_KZT: 92643 }, { client_code: 2, name: "Данияр", status: "Премиальный клиент", age: 41, city: "Астана", avg_monthly_balance_KZT: 1577073 }, { client_code: 3, name: "Сабина", status: "Студент", age: 22, city: "Алматы", avg_monthly_balance_KZT: 63116 }, { client_code: 4, name: "Тимур", status: "Зарплатный клиент", age: 36, city: "Караганда", avg_monthly_balance_KZT: 83351 }, { client_code: 5, name: "Камилла", status: "Премиальный клиент", age: 45, city: "Алматы", avg_monthly_balance_KZT: 1336536 }, { client_code: 6, name: "Аян", status: "Стандартный клиент", age: 34, city: "Шымкент", avg_monthly_balance_KZT: 131929 }, { client_code: 7, name: "Руслан", status: "Премиальный клиент", age: 48, city: "Алматы", avg_monthly_balance_KZT: 4040997 }, { client_code: 8, name: "Мадина", status: "Зарплатный клиент", age: 33, city: "Астана", avg_monthly_balance_KZT: 1058403 }, { client_code: 9, name: "Арман", status: "Премиальный клиент", age: 55, city: "Алматы", avg_monthly_balance_KZT: 3084180 }, { client_code: 10, name: "Карина", status: "Зарплатный клиент", age: 38, city: "Усть-Каменогорск", avg_monthly_balance_KZT: 1277325 }, { client_code: 11, name: "Бауржан", status: "Премиальный клиент", age: 50, city: "Павлодар", avg_monthly_balance_KZT: 3230572 }, { client_code: 12, name: "Жанар", status: "Зарплатный клиент", age: 42, city: "Костанай", avg_monthly_balance_KZT: 849046 }, { client_code: 13, name: "Алина", status: "Студент", age: 20, city: "Алматы", avg_monthly_balance_KZT: 54074 }, { client_code: 14, name: "Диас", status: "Зарплатный клиент", age: 27, city: "Астана", avg_monthly_balance_KZT: 57385 }, { client_code: 15, name: "Нурия", status: "Стандартный клиент", age: 31, city: "Шымкент", avg_monthly_balance_KZT: 160778 }, { client_code: 16, name: "Ерасыл", status: "Студент", age: 23, city: "Караганда", avg_monthly_balance_KZT: 46630 }, { client_code: 17, name: "Жанель", status: "Зарплатный клиент", age: 30, city: "Тараз", avg_monthly_balance_KZT: 89126 }, { client_code: 18, name: "Санжар", status: "Стандартный клиент", age: 35, city: "Кызылорда", avg_monthly_balance_KZT: 98089 }, { client_code: 19, name: "Азамат", status: "Зарплатный клиент", age: 32, city: "Алматы", avg_monthly_balance_KZT: 80150 }, { client_code: 20, name: "Анель", status: "Стандартный клиент", age: 28, city: "Астана", avg_monthly_balance_KZT: 141515 }, { client_code: 21, name: "Павел", status: "Премиальный клиент", age: 44, city: "Алматы", avg_monthly_balance_KZT: 1798169 }, { client_code: 22, name: "Аружан", status: "Зарплатный клиент", age: 26, city: "Шымкент", avg_monthly_balance_KZT: 77474 }, { client_code: 23, name: "Темирлан", status: "Стандартный клиент", age: 39, city: "Павлодар", avg_monthly_balance_KZT: 146389 }, { client_code: 24, name: "Гульмира", status: "Зарплатный клиент", age: 41, city: "Усть-Каменогорск", avg_monthly_balance_KZT: 53785 }, { client_code: 25, name: "Адиль", status: "Зарплатный клиент", age: 36, city: "Алматы", avg_monthly_balance_KZT: 55634 }, { client_code: 26, name: "Маржан", status: "Стандартный клиент", age: 33, city: "Астана", avg_monthly_balance_KZT: 136248 }, { client_code: 27, name: "Нурсултан", status: "Зарплатный клиент", age: 29, city: "Караганда", avg_monthly_balance_KZT: 70858 }, { client_code: 28, name: "Алтынай", status: "Стандартный клиент", age: 42, city: "Кызылорда", avg_monthly_balance_KZT: 150281 }, { client_code: 29, name: "Сая", status: "Зарплатный клиент", age: 25, city: "Тараз", avg_monthly_balance_KZT: 88487 }, { client_code: 30, name: "Ербол", status: "Стандартный клиент", age: 40, city: "Павлодар", avg_monthly_balance_KZT: 104553 }, { client_code: 31, name: "Дамир", status: "Зарплатный клиент", age: 34, city: "Алматы", avg_monthly_balance_KZT: 1303848 }, { client_code: 32, name: "Алия", status: "Премиальный клиент", age: 46, city: "Астана", avg_monthly_balance_KZT: 2317160 }, { client_code: 33, name: "Мерей", status: "Зарплатный клиент", age: 31, city: "Шымкент", avg_monthly_balance_KZT: 824246 }, { client_code: 34, name: "Инкар", status: "Стандартный клиент", age: 37, city: "Караганда", avg_monthly_balance_KZT: 115930 }, { client_code: 35, name: "Самат", status: "Премиальный клиент", age: 52, city: "Алматы", avg_monthly_balance_KZT: 1448797 }, { client_code: 36, name: "Назым", status: "Зарплатный клиент", age: 29, city: "Усть-Каменогорск", avg_monthly_balance_KZT: 712277 }, { client_code: 37, name: "Гульнар", status: "Зарплатный клиент", age: 45, city: "Алматы", avg_monthly_balance_KZT: 900361 }, { client_code: 38, name: "Серик", status: "Премиальный клиент", age: 54, city: "Астана", avg_monthly_balance_KZT: 5818675 }, { client_code: 39, name: "Ляззат", status: "Зарплатный клиент", age: 39, city: "Костанай", avg_monthly_balance_KZT: 1248239 }, { client_code: 40, name: "Асхат", status: "Стандартный клиент", age: 43, city: "Павлодар", avg_monthly_balance_KZT: 86092 }, { client_code: 41, name: "Сандугаш", status: "Зарплатный клиент", age: 47, city: "Шымкент", avg_monthly_balance_KZT: 1164313 }, { client_code: 42, name: "Рустем", status: "Премиальный клиент", age: 58, city: "Алматы", avg_monthly_balance_KZT: 2948028 }, { client_code: 43, name: "Нуртас", status: "Зарплатный клиент", age: 28, city: "Астана", avg_monthly_balance_KZT: 76320 }, { client_code: 44, name: "Айнагуль", status: "Стандартный клиент", age: 35, city: "Алматы", avg_monthly_balance_KZT: 89846 }, { client_code: 45, name: "Диана", status: "Зарплатный клиент", age: 27, city: "Караганда", avg_monthly_balance_KZT: 72552 }, { client_code: 46, name: "Арсен", status: "Стандартный клиент", age: 33, city: "Кызылорда", avg_monthly_balance_KZT: 86024 }, { client_code: 47, name: "Камшат", status: "Зарплатный клиент", age: 30, city: "Тараз", avg_monthly_balance_KZT: 79592 }, { client_code: 48, name: "Ержан", status: "Стандартный клиент", age: 38, city: "Павлодар", avg_monthly_balance_KZT: 82214 }, { client_code: 49, name: "Амина", status: "Зарплатный клиент", age: 26, city: "Алматы", avg_monthly_balance_KZT: 1410759 }, { client_code: 50, name: "Тимурлан", status: "Премиальный клиент", age: 42, city: "Астана", avg_monthly_balance_KZT: 3573697 }, { client_code: 51, name: "Жанат", status: "Зарплатный клиент", age: 31, city: "Шымкент", avg_monthly_balance_KZT: 1429027 }, { client_code: 52, name: "Милана", status: "Премиальный клиент", age: 36, city: "Алматы", avg_monthly_balance_KZT: 3418709 }, { client_code: 53, name: "Расул", status: "Зарплатный клиент", age: 29, city: "Караганда", avg_monthly_balance_KZT: 1258584 }, { client_code: 54, name: "Виктория", status: "Премиальный клиент", age: 45, city: "Усть-Каменогорск", avg_monthly_balance_KZT: 4083294 }, { client_code: 55, name: "Асель", status: "Премиальный клиент", age: 49, city: "Алматы", avg_monthly_balance_KZT: 3504443 }, { client_code: 56, name: "Нуркен", status: "Зарплатный клиент", age: 44, city: "Астана", avg_monthly_balance_KZT: 60622 }, { client_code: 57, name: "Жания", status: "Премиальный клиент", age: 52, city: "Павлодар", avg_monthly_balance_KZT: 2757704 }, { client_code: 58, name: "Султан", status: "Зарплатный клиент", age: 40, city: "Караганда", avg_monthly_balance_KZT: 62335 }, { client_code: 59, name: "Динара", status: "Премиальный клиент", age: 55, city: "Алматы", avg_monthly_balance_KZT: 4427461 }, { client_code: 60, name: "Ермек", status: "Зарплатный клиент", age: 42, city: "Кызылорда", avg_monthly_balance_KZT: 48779 }
+        ];
+
+        const tableBody = document.querySelector('#clientsTable tbody');
+        const showIdButton = document.getElementById('showIdButton');
+        const selectedClientIdSpan = document.getElementById('selectedClientId');
+        const loader = document.getElementById('loader');
+        const resultDisplay = document.getElementById('result-display');
+        let selectedRow = null;
+        
+
+        const apiCache = {};
+
+
+        clientsData.forEach(client => {
+            const row = document.createElement('tr');
+            row.dataset.clientId = client.client_code;
+            const formattedBalance = client.avg_monthly_balance_KZT.toLocaleString('ru-RU');
+            row.innerHTML = `<td>${client.client_code}</td><td>${client.name}</td><td>${client.status}</td><td>${client.age}</td><td>${client.city}</td><td>${formattedBalance}</td>`;
+            tableBody.appendChild(row);
+        });
+
+
+        tableBody.addEventListener('click', (event) => {
+            const clickedRow = event.target.closest('tr');
+            if (!clickedRow) return;
+            if (selectedRow) selectedRow.classList.remove('selected');
+            clickedRow.classList.add('selected');
+            selectedRow = clickedRow;
+            selectedClientIdSpan.textContent = selectedRow.dataset.clientId;
+        });
+        
+
+        showIdButton.addEventListener('click', () => {
+            if (selectedRow) {
+                const clientId = parseInt(selectedRow.dataset.clientId, 10);
+                sendClientId(clientId);
+            } else {
+                alert('Пожалуйста, сначала выберите клиента из таблицы.');
+            }
+        });
+
+
+        function displayResult(resultData, fromCache = false) {
+            resultDisplay.innerHTML = ''; 
+            
+            if (resultData.status === "success" && resultData.row) {
+                const productTitle = document.createElement('h3');
+                productTitle.textContent = `Рекомендованный продукт: ${resultData.row.product}`;
+                
+                if (fromCache) {
+                    const cacheLabel = document.createElement('span');
+                    cacheLabel.textContent = ' (из кэша)';
+                    cacheLabel.style.color = '#7f8c8d';
+                    cacheLabel.style.fontSize = '0.9rem';
+                    productTitle.appendChild(cacheLabel);
+                }
+
+                const notificationText = document.createElement('p');
+                notificationText.innerHTML = resultData.row.push_notification.replace(/\n/g, '<br>');
+
+                resultDisplay.appendChild(productTitle);
+                resultDisplay.appendChild(notificationText);
+            } else {
+                const errorMessage = resultData.reason || 'Неизвестная ошибка на сервере.';
+                resultDisplay.innerHTML = `<p style="color: red;">${errorMessage}</p>`;
+            }
+            resultDisplay.classList.remove('hidden');
+        }
+
+
+        function sendClientId(id) {
+
+            if (apiCache[id]) {
+                console.log(`Загрузка ID: ${id} из кэша.`);
+                displayResult(apiCache[id], true); 
+                return; 
+            }
+
+
+            console.log(`Запрос на сервер для ID: ${id}.`);
+            const url = 'http://127.0.0.1:8000/process_id';
+            const data = { id: id };
+
+
+            showIdButton.disabled = true;
+            resultDisplay.classList.add('hidden');
+            loader.classList.remove('hidden');
+
+            fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Ошибка сети: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(resultData => {
+
+                if (resultData.status === 'success') {
+                    apiCache[id] = resultData;
+                    console.log(`Результат для ID: ${id} сохранен в кэш.`);
+                }
+                displayResult(resultData); 
+            })
+            .catch(error => {
+                console.error('Ошибка:', error);
+                resultDisplay.innerHTML = `<p style="color: red;">Не удалось получить результат. Ошибка: ${error.message}</p>`;
+                resultDisplay.classList.remove('hidden');
+            })
+            .finally(() => {
+                loader.classList.add('hidden');
+                showIdButton.disabled = false;
+            });
+        }
+    });
+</script>
+
+</body>
+</html>
