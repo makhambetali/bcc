@@ -31,7 +31,7 @@ class ClientAnalyzer:
 
             self.transactions_df = pd.read_csv(transactions_path)
             self.transfers_df = pd.read_csv(transfers_path)
-
+            # print(self.client_profile)
             print("Данные успешно загружены.\n")
             
         except (FileNotFoundError, KeyError) as e:
@@ -65,8 +65,7 @@ class ClientAnalyzer:
 
     def calculate_premium_card_cashback(self):
         MAX_CASHBACK = 100_000 * 3
-        profile_df = self.client_profile.get('profile')
-        avg_balance = int(profile_df['avg_monthly_balance_KZT'])
+        avg_balance = int(self.client_profile.get('avg_monthly_balance_KZT'))
         avg_balance_cashback = 0
         if avg_balance < 1_000_000:
             tier_cashback_rate = 0.02
@@ -138,16 +137,168 @@ class ClientAnalyzer:
         relevant_spend = self.transfers_df[is_travel_category]['amount'].sum()
         # ratio = relevant_spend / total_spend
         return relevant_spend/total_spend #сколько денег можно вернуть кэшбеком
+    
+    def calculate_dep_savings_score(self):
+        INTEREST_RATE = 0.165
+        k = 0.8 # коэффицент строгости для is_stable_expenses: чем ниже - тем строже
+        balance_stats = self.get_balance_statistics()
+        is_high_balance = self.client_profile['avg_monthly_balance_KZT'] > balance_stats['mean']
+        is_stable_expenses = self.transactions_df['amount'].std() < (self.transactions_df['amount'].mean() * k)
+
+        # print(self.get_balance_statistics())
+        # print(is_high_balance, is_stable_expenses)
+        # print(self.client_profile['avg_monthly_balance_KZT'], balance_stats['mean'])
+
+    def calc_liquidity_score(self):
+        """
+        Депозит Мультивалютный — оцениваем активность валютных операций.
+        """
+        INTEREST_RATE = 0.145
+        if self.transfers_df.empty:
+            return 0.0
+
+        # fx_topups = self.transfers_df[self.transfers_df.type == "deposit_fx_topup_out"].amount.sum()
+        # fx_withdraws = self.transfers_df[self.transfers_df.type == "deposit_fx_withdraw_in"].amount.sum()
+        fx_ops = self.transfers_df[self.transfers_df.type.isin(["fx_buy", "fx_sell"])].shape[0]
+        is_travel_category = self.transfers_df['type'].isin(['deposit_fx_topup_out', 'deposit_fx_withdraw_in'])
+        # is_fx_currency = transactions_df['currency'].isin(['USD', 'EUR'])
+        relevant_spend = self.transfers_df[is_travel_category]['amount'].sum()
+        score = relevant_spend + fx_ops * 1000  # условный вес
+        # return s
+        # print(relevant_spend)
+        # print('rs', score * (1 + INTEREST_RATE))
+        return int(score * (1 + INTEREST_RATE))
+
+    def calc_max_yield(self):
+        """
+        Депозит Сберегательный — проверяем один большой topup.
+        """
+        INTEREST_RATE = 0.165
+        if self.transfers_df.empty:
+            return 0.0
+        is_savings = self.transfers_df['type'].isin(['deposit_topup_out'])
+        savings_sum = self.transfers_df[is_savings]['amount'].sum()
+        savings_count = self.transfers_df[is_savings].shape[0]
+        balance_stats = self.get_balance_statistics()
+        is_high_balance = self.client_profile['avg_monthly_balance_KZT'] > balance_stats['mean']
+        # print('f', savings_count, savings_sum)
+
+        return int(savings_count == 0 and is_high_balance)
+
+    def calc_saving_discipline(self):
+        """
+        Депозит Накопительный — оцениваем регулярность пополнений.
+        """
+        INTEREST_RATE = 0.155
+        if self.transfers_df.empty:
+            return 0.0
+        is_savings = self.transfers_df['type'].isin(['deposit_topup_out'])
+        recurring_sum = self.transfers_df[is_savings].amount.sum()
+        recurring_count = self.transfers_df[is_savings].shape[0]
+        # print('r', recurring_count, recurring_sum)
+        if recurring_count > 1:
+            return int(recurring_sum * (1 + INTEREST_RATE) * (1 + 0.05 * recurring_count))
+        return 0.0
+
+    def choose_best_deposit(self):
+        """
+        Сравнивает три депозита и возвращает лучший вариант для клиента.
+        """
+        scores = {
+            "Депозит Сберегательный": self.calc_max_yield(),
+            "Депозит Накопительный": self.calc_saving_discipline(),
+            "Депозит Мультивалютный": self.calc_liquidity_score(),
+        }
+        best_product = max(scores, key=scores.get)
+        return {"scores": scores, "best_product": best_product}
 
     def execute(self):
-        print(f'currency exchange ratio: {self.calculate_currency_exchange_ratio()}')
-        print(f'gold ratio: {self.calculate_gold_ratio()}')
-        print(f'investment ratio: {self.calculate_invest_ratio()}')
+        # print(f'currency exchange ratio: {self.calculate_currency_exchange_ratio()}')
+        # print(f'gold ratio: {self.calculate_gold_ratio()}')
+        # print(f'investment ratio: {self.calculate_invest_ratio()}')
+        ratio_variables = {
+            'Обмен валют': self.calculate_currency_exchange_ratio(),
+            'Золотые слитки': self.calculate_gold_ratio(),
+            'Инвестиции': self.calculate_invest_ratio()
+        }
+        
+        # if max(ratio_variables.values()) > 0.3:
+        max_key = 'Обмен валют'
+        max_ratio = ratio_variables[max_key]
+        
+        for key in ratio_variables:
+            if ratio_variables[key] > max_ratio:
+                max_ratio = ratio_variables[key]
+                max_key = key
+        # print(f'MAX: {max_key}: {max_ratio}')
+        if max_ratio > 0.3:
+            # print(f'jb: {max_key}: {max_ratio}')
+            print(max_key)
+            return
+        
+        self.calculate_dep_savings_score()
+        dep_result = self.choose_best_deposit()
+        # print(list(dep_result['scores'].values()))
+        max_score = dep_result['scores']['Депозит Сберегательный']
+        max_score_key = 'Депозит Сберегательный'
+        if list(dep_result['scores'].values()) != [0, 0, 0]:
+            for key in dep_result['scores']:
+                if dep_result['scores'][key] > max_score:
+                    max_score = dep_result['scores'][key]
+                    max_score_key = key
+            print(max_score_key)
+            return
+        travel_cashback = self.calculate_travel_card_cashback()
+        premium_cashback = self.calculate_premium_card_cashback()
+        credit_cashback = self.calculate_credit_card_cashback()
+        print(f'КАРТЫ ДЛЯ ПУТЕШЕСТВИЙ: {travel_cashback} KZT')
+        print(f'ПРЕМИАЛЬНАЯ КАРТА: {premium_cashback} KZT')
+        print(f'КРЕДИТНАЯ КАРТА: {credit_cashback} KZT')
+        # print(max(travel_cashback, premium_cashback))
+        max_cashback = max(travel_cashback, premium_cashback)
+        if max_cashback ==travel_cashback:
+            print('КАРТЫ ДЛЯ ПУТЕШЕСТВИЙ')
+        else:
+            print('ПРЕМИАЛЬНАЯ КАРТА')
+
+        # if dep_result.values() =
+        # print("=== Депозиты ===")
+        # print(dep_result['best_product'])
+        # for k, v in dep_result["scores"].items():
+        #     print(f"{k}: {v:.2f}")
+        # print(f"Лучший депозит для клиента {self.client_id}: {dep_result['best_product']}")
 
 
 
+    def get_balance_statistics(self) -> Dict[str, float]:
+        """
+        Рассчитывает ключевые статистические показатели (среднее, медиана, перцентили)
+        по колонке avg_monthly_balance_KZT для всех клиентов.
+
+        Args:
+            profiles_df: DataFrame, содержащий профили всех клиентов.
+
+        Returns:
+            Словарь со статистическими показателями.
+        """
+        balance_data = self.all_profiles['avg_monthly_balance_KZT']
+    
+        stats = {
+            "mean": balance_data.mean(),
+            "median": balance_data.median(),
+            "75%": balance_data.quantile(0.75),
+            "85%": balance_data.quantile(0.85),
+            "95%": balance_data.quantile(0.95)
+        }
+        return stats
 
 if __name__ == '__main__':
-    ID_TO_ANALYZE = 49
-    ca = ClientAnalyzer(ID_TO_ANALYZE)
+    import argparse
+    parser = argparse.ArgumentParser(description="Анализ клиента по ID")
+    parser.add_argument("client_id", type=int, help="ID клиента для анализа")
+    args = parser.parse_args()
+
+    ca = ClientAnalyzer(args.client_id)
     ca.execute()
+    # ca.calculate_dep_savings_score()
+    
